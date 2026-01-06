@@ -1,5 +1,6 @@
 {
   "name": "blog",
+  "packageManager": "pnpm@10.27.0",
   "description": "A project of vuepress-theme-hope",
   "version": "2.0.0",
   "license": "MIT",
