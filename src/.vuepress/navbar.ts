@@ -2,7 +2,7 @@ import { navbar } from "vuepress-theme-hope";
 
 export default navbar([
   "/",
-  "/demo/",
+  // "/demo/",
   "/linux/",
   {
     text: "博文",
