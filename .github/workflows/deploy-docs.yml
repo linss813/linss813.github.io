@@ -31,7 +31,6 @@ jobs:
           corepack enable
           # 安装项目原有依赖
           pnpm install --frozen-lockfile
-          # 额外安装你需要的工具包，确保构建时能找到 @vuepress/utils
           pnpm add -D @vuepress/utils @vuepress/client@next vue
 
       - name: 构建文档
