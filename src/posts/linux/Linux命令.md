@@ -1,3 +1,16 @@
+---
+icon: pen-to-square
+date: 2026-01-02
+category:
+  - linux
+tag:
+  - linux
+  - 命令
+
+---
+
+# linux常用命令
+
 ## vim
 - 编辑模式：i-向前插入，a-向后插入，o-向下插入
 - 视图模式：整行选中：shift+v  
