@@ -1,1 +1,9 @@
 // place your custom styles here
+
+// 英雄区背景图配置
+.vp-blog-mask {
+  background-image: url(../public/assets/images/index.png) !important;
+  background-size: cover;
+  background-position: center;
+  background-repeat: no-repeat;
+}

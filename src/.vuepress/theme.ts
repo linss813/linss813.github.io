@@ -70,15 +70,15 @@ export default hopeTheme({
     },
   },
 
-  // 加密配置
-  encrypt: {
-    config: {
-      "/demo/encrypt.html": {
-        hint: "Password: 1234",
-        password: "1234",
-      },
-    },
-  },
+  // 加密配置（如需加密页面，取消注释并配置）
+  // encrypt: {
+  //   config: {
+  //     "/your-page.html": {
+  //       hint: "请输入密码",
+  //       password: "your-password",
+  //     },
+  //   },
+  // },
 
   // 多语言配置
   metaLocales: {

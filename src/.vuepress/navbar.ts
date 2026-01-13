@@ -2,8 +2,6 @@ import { navbar } from "vuepress-theme-hope";
 
 export default navbar([
   "/",
-  // "/demo/",
-  "/linux/",
   {
     text: "博文",
     icon: "pen-to-square",
@@ -17,12 +15,12 @@ export default navbar([
           { text: "Linux命令", icon: "pen-to-square", link: "Linux命令" },
         ],
       },
-      { text: "樱桃", icon: "pen-to-square", link: "cherry" },
+      // { text: "樱桃", icon: "pen-to-square", link: "cherry" },
     ],
   },
-  {
-    text: "V2 文档",
-    icon: "book",
-    link: "https://theme-hope.vuejs.press/zh/",
-  },
+  // {
+  //   text: "V2 文档",
+  //   icon: "book",
+  //   link: "https://theme-hope.vuejs.press/zh/",
+  // },
 ]);
