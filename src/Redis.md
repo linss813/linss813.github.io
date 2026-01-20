@@ -1,5 +1,5 @@
 ---
-title: Redis
+title: Redis详细配置使用与面试题
 date: 2026-01-16
 category:
   - 运维
