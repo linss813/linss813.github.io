@@ -1,3 +1,4 @@
+navbar.ts
 import { navbar } from "vuepress-theme-hope";
 
 export default navbar([
@@ -15,7 +16,22 @@ export default navbar([
           { text: "Linux命令", icon: "pen-to-square", link: "Linux命令" },
         ],
       },
-      // { text: "樱桃", icon: "pen-to-square", link: "cherry" },
+      {
+        text: "docker",
+        icon: "pen-to-square",
+        prefix: "docker/",
+        children: [
+          { text: "容器化技术docker", icon: "pen-to-square", link: "容器化技术Docker" },
+        ],
+      },
+      {
+        text: "redis",
+        icon: "pen-to-square",
+        prefix: "redis/",
+        children: [
+          { text: "Redis", icon: "pen-to-square", link: "Redis" },
+        ],
+      },
     ],
   },
   // {
