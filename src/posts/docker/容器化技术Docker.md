@@ -13,6 +13,8 @@ date: 2026-01-21
 - 帮助文档链接: https://docs.docker.com/
 - Docker 镜像: https://hub.docker.com/
 - Docker 中文网站: http://www.docker.org.cn/
+- 镜像加速网站：
+	- https://dockerproxy.net/
 ## 容器核心技术
 ### Namespace（命名空间）：资源的隔离
 让容器进程认为自己拥有一个独立的操作系统环境。
@@ -138,15 +140,18 @@ docker version  # 检查
 `/etc/docker/daemon.json`
 添加json文件后重启docker服务
 ```json
-{  
-    "registry-mirrors": [  
-        "https://docker.m.daocloud.io",  
-        "https://docker.1panel.live",  
-        "https://docker.1ms.run",  
-        "https://docker.xuanyuan.me"  
-    ],  
-    "insecure-registries": ["harbor.wang.org"]  
+mkdir -pv /etc/docker
+cat > /etc/docker/daemon.json <<EOF
+{
+  "registry-mirrors": [
+    "https://docker.m.daocloud.io",
+    "https://docker.1panel.live",
+    "https://docker.1ms.run",
+    "https://docker.xuanyuan.me"
+  ],
+  "insecure-registries": ["harbor.wang.org"]
 }
+EOF
 ```
 ## 常用命令
 ### 镜像管理 (Images)
@@ -162,6 +167,16 @@ docker image prune   # 删除所有未被使用的镜像
 docker tag           # 为镜像创建一个新的标签（别名/版本）
 ```
 ### 容器管理 (Containers)
+核心启动命令：`docker run`
+```shell
+# 示例：启动一个后台自动重启的 
+Nginx docker run -d --name my-web -p 80:80 --restart always nginx
+```
+- **`-d`**：后台运行。
+- **`--name`**：指定容器名称。
+- **`-p`**：宿主机端口:容器端口映射。
+- **`--restart always`**：容器崩溃或 Docker 重启后自动拉起。
+- **`-it`**：开启交互终端（常用与执行 bash）。
 #### 运行与启动
 ```shell
 docker run -d        # 后台运行容器
@@ -183,3 +198,536 @@ docker stats         # 实时查看容器资源使用率（CPU/内存）
 docker exec -it      # 进入正在运行的容器执行交互命令
 ```
 
+## 简单部署wordpress
+### 拉取镜像  docker pull
+```shell
+docker pull mysql:8.0.44
+docker pull wordpress:php8.5-apache
+```
+### 启动  docker run
+- 启动mysql
+```shell
+docker run -d \
+--name mysql \
+--restart always \
+-e MYSQL_ROOT_PASSWORD=123456 \
+-e MYSQL_DATABASE=wordpress \
+-e MYSQL_USER=wordpress \
+-e MYSQL_PASSWORD=654321 \
+mysql:8.0.44
+```
+- 启动wordpress项目
+```shell
+docker run --name wordpress -P -d \
+-e WORDPRESS_DB_HOST=172.17.0.2 \
+-e WORDPRESS_DB_USER=wordpress \ 
+-e WORDPRESS_DB_PASSWORD=654321 \
+-e WORDPRESS_DB_NAME=wordpress \
+wordpress:php8.5-apache
+```
+- 查看端口
+	可通过一下命令查看、筛选
+```shell
+# mysql服务IP地址
+docker inspect -f '{{.NetworkSettings.Networks.bridge.IPAddress}}' mysql
+
+ss -tnlp
+
+docker inspect wordpress | grep -E 'port|ip' -i
+```
+
+```shell
+[root@ubuntu2404 ~]# docker inspect wordpress | grep -E 'port|ip' -i
+            "PortBindings": {},
+            "IpcMode": "private",
+            "PublishAllPorts": true,
+            "ExposedPorts": {
+            "Ports": {
+                        "HostIp": "0.0.0.0",
+                        "HostPort": "32768"
+                        "HostIp": "::",
+                        "HostPort": "32768"
+                    "IPAMConfig": null,
+                    "IPAddress": "172.17.0.3",
+                    "IPPrefixLen": 16,
+                    "IPv6Gateway": "",
+                    "GlobalIPv6Address": "",
+                    "GlobalIPv6PrefixLen": 0,
+        "ImageManifestDescriptor": {
+```
+浏览器访问`172.17.0.3:32768`即可
+## 镜像位置迁移
+### 创建逻辑卷并挂载到 `/data`
+通过lvs创建新的逻辑卷并挂载到`/data`路径下
+```shell
+lvdisplay # 查看卷名
+[root@ubuntu2404 ~]# lvdisplay
+  --- Logical volume ---
+  LV Path                /dev/ubuntu-vg/ubuntu-lv
+  LV Name                ubuntu-lv
+  VG Name                ubuntu-vg
+
+# 创建逻辑卷
+lvcreate -L 25G -n lv_data ubuntu-vg
+
+# 格式化
+mkfs.ext4 /dev/ubuntu-vg/lv_data
+
+# 创建路径并挂载
+mkdir /data
+mount /dev/ubuntu-vg/lv_data /data
+echo "/dev/ubuntu-vg/lv_data /data ext4 defaults 0 0" >> /etc/fstab
+
+```
+### 迁移 Docker 镜像位置
+停止 Docker 服务并迁移
+```shell
+systemctl stop docker
+systemctl stop docker.socket
+
+cp -rp /var/lib/docker /data/
+```
+
+ 修改 Docker 配置文件
+```shell
+vim /etc/docker/daemon.json
+```
+```shell
+{
+  "data-root": "/data/docker"
+}
+```
+
+加载配置并启动
+```shell
+systemctl daemon-reload
+systemctl start docker
+```
+### 验证迁移结果
+```shell
+docker info | grep "Docker Root Dir"
+
+[root@ubuntu2404 ~]# df -h /data
+Filesystem                      Size  Used Avail Use% Mounted on
+/dev/mapper/ubuntu--vg-lv_data   25G  3.7G   20G  16% /data
+```
+## 制作镜像
+
+### 手动制作
+```sh
+docker commit [容器ID或名称] [新镜像名]:[标签]
+```
+#### 拉取镜像
+```shell
+docker pull alpine:3.20.0
+```
+#### 启动容器
+```shell
+docker run --name mynginx -it alpine:3.20.0 sh
+```
+##### 1.优化配置
+```sh
+# 容器内操作
+sed -i 's@dl-cdn.alpinelinux.org@mirrors.tuna.tsinghua.edu.cn@'  /etc/apk/repositories
+apk update 
+apk --no-cache add tzdata gcc make curl zip unzip net-tools pstree wget libgcc libc-dev libcurl libc-utils pcre-dev zlib-dev libnfs pcre pcre2 libevent libevent-dev iproute2
+ln -s /usr/share/zoneinfo/Asia/Shanghai /etc/localtime
+echo "Asia/Shanghai" > /etc/timezone
+```
+##### 2.下载源码并编译
+```shell
+# 容器内操作
+wget https://nginx.org/download/nginx-1.28.0.tar.gz 
+mkdir /usr/local/src 
+tar xf nginx-1.28.0.tar.gz -C /usr/local/src 
+cd /usr/local/src/nginx-1.28.0/ 
+./configure --prefix=/apps/nginx 
+make && make install
+```
+#### 将定制的容器制作为新镜像
+```shell
+docker commit mynginx nginx:v1.28
+```
+
+### dockerfile
+https://docs.docker.com/reference/dockerfile
+创建相关目录
+```shell
+mkdir /data/dockerfile/{web/{nginx,apache,tomcat,jdk},system/{centos,ubuntu,alpine,debian}} -p
+```
+#### Dockerfile相关命令
+##### FROM
+- **作用**：指定基础镜像，是 Dockerfile 的第一条指令。
+- **示例**：
+```Dockerfile
+FROM alpine:3.20.0
+```
+##### LABEL
+- **作用**：为镜像添加元数据（作者、描述、版本等）。
+- **示例**：
+```Dockerfile
+LABEL version="1.0" description="Nginx 编译镜像"
+```
+##### COPY
+- **功能**：单纯地将宿主机的文件或目录复制到镜像内。
+- **特点**：语义清晰，不支持 URL 或自动解压。
+```Dockerfile
+COPY nginx.conf /etc/nginx/nginx.conf
+```
+##### ADD
+- - **功能**：高级复制指令。
+    - **特有能力**：
+        1. **自动解压**：如果源文件是本地的压缩包（tar, gzip, bzip2 等），它会自动解压到目标路径。
+        2. **支持 URL**：可以从远程 URL 下载文件。
+```dockerfile
+# 假设宿主机当前目录有 nginx-1.28.0.tar.gz
+# 它会自动解压成目录，而不需要手动运行 tar xf
+ADD nginx-1.28.0.tar.gz /usr/local/src/
+
+# 直接从官网下载并存入镜像（不推荐，建议用 RUN wget）
+ADD https://nginx.org/download/nginx-1.28.0.tar.gz /tmp/
+```
+###### COPY vs. ADD
+- 原则：首选 `COPY`。它更透明，不容易出错。
+- 场景：只有当你需要“自动解压本地压缩包”到镜像内时，才使用 `ADD`。
+- 注意：不建议用 `ADD` 从 URL 下载文件，因为这会产生无法清理的镜像层垃圾，建议改用 `RUN wget`。
+##### ARG (Build Argument)
+- 生命周期：仅在镜像构建阶段有效。
+- 特点：构建完成后，变量消失。运行容器时无法访问这些变量。
+- 示例：
+```Dockerfile
+# 定义 Nginx 版本，构建时可以通过 --build-arg NGINX_VER=1.26 覆盖
+ARG NGINX_VER=1.28.0
+RUN wget https://nginx.org/download/nginx-${NGINX_VER}.tar.gz
+```
+##### ENV (Environment Variable)
+- 生命周期：在构建阶段和运行阶段均有效。
+- 特点：变量会固化到镜像元数据中，程序运行时可以读取。
+- 示例：
+```Dockerfile
+# 设置 Nginx 安装路径，容器启动后程序也能通过 $NGINX_PATH 找到它
+ENV NGINX_PATH=/apps/nginx
+ENV PATH="${NGINX_PATH}/sbin:${PATH}"
+```
+######  ARG vs. ENV
+- 使用场景：ARG 用于“定义构建时的配置”（如指定版本号）；ENV 用于“定义系统运行环境”（如时区、路径）。
+- 协作：你可以通过 `ARG` 接收外部传入的版本号，然后在内部通过 `ENV` 将其固化。
+##### RUN
+- 阶段：构建镜像时执行。
+- 目的：安装包、编译代码、修改系统配置。每执行一次 `RUN` 都会产生一层新镜像。
+- 技巧：使用 `&&` 合并命令以减少层数。
+```Dockerfile
+# 建议使用 && 合并命令，减少镜像层数
+RUN apk update && \
+    apk add --no-cache gcc make pcre-dev zlib-dev
+```
+##### WORKDIR
+- 作用：设置后续指令（RUN, CMD, COPY 等）的工作目录。**相当于`mkdir && cd`**
+- 优点：比 `RUN cd /path` 更好，它会自动创建不存在的目录，并在后续指令中持续生效。
+```Dockerfile
+# 如果目录不存在，Docker 会自动创建
+WORKDIR /usr/local/src
+# 此时下载的文件会直接出现在 /usr/local/src 下
+RUN wget https://nginx.org/download/nginx-1.28.0.tar.gz
+```
+##### CMD
+- 作用：为容器启动提供默认执行程序和参数。
+- 特性：会被 `docker run <image> <command>` 命令行后的参数完全覆盖。
+```Dockerfile
+# 默认启动 Nginx
+CMD ["nginx", "-g", "daemon off;"]
+```
+##### ENTRYPOINT
+- 作用：指定容器启动时的主程序。
+- 特性：不可被覆盖（除非使用 `--entrypoint`）。命令行后的参数会被当做附加参数传给它。
+```Dockerfile
+# 强制启动 Nginx
+ENTRYPOINT ["nginx"]
+# 配合 CMD 提供默认参数
+CMD ["-g", "daemon off;"]
+```
+
+###### CMD vs. ENTRYPOINT
+- 协作模式（推荐）：使用 `ENTRYPOINT` 定义程序，`CMD` 定义默认参数。
+```Dockerfile
+ENTRYPOINT ["nginx"]
+CMD ["-g", "daemon off;"]
+```
+- 效果：这样用户执行 `docker run my-nginx -s reload` 时，只会覆盖参数部分，程序依然是 nginx。
+##### EXPOSE
+- 作用：声明镜像内服务监听的端口。
+- 提示：这只是文档性声明，真正的端口映射需在 `docker run -p` 中完成。
+```shell
+# 告诉使用者这个容器需要开启 80 和 443 端口
+EXPOSE 80 443
+```
+##### VOLUME
+- 作用：声明匿名数据卷。
+- 目的：防止用户忘记挂载目录导致持久化数据随容器删除而丢失。
+```shell
+# 将 Nginx 的日志目录设为匿名卷
+VOLUME ["/apps/nginx/logs"]
+```
+
+##### SHELL
+- 作用：指定 `RUN`、`CMD` 和 `ENTRYPOINT` 指令所使用的默认 Shell。
+- 案例：
+```dockerfile
+# 将默认的 ["/bin/sh", "-c"] 改为使用 powershell (常用于 Windows 镜像)
+SHELL ["powershell", "-Command"]
+```
+
+##### USER
+- **作用**：指定运行后续命令以及容器运行时的用户名或 UID。
+- **案例**：
+```dockerfile
+# 创建非 root 用户并切换，提高安全性
+RUN adduser -D myuser
+USER myuser
+```
+##### ONBUILD
+- 作用：当该镜像作为“父镜像”被其他 Dockerfile 继承（`FROM`）时，才会触发执行的指令。
+- 案例：
+```dockerfile
+# 在基础镜像中定义，子镜像构建时会自动拷贝其源码目录
+ONBUILD COPY . /app/src
+ONBUILD RUN make /app/src
+```
+##### HEALTHCHECK
+- 作用：配置容器的健康检查命令，告诉 Docker 如何判断容器服务是否正常。
+- 案例：
+```dockerfile
+# 每 5 分钟检查一次 Nginx 是否能响应，超时 3 秒
+HEALTHCHECK --interval=5m --timeout=3s \
+  CMD curl -f http://localhost/ || exit 1
+```
+##### STOPSIGNAL
+- 作用：设置容器退出时发送给进程的系统调用信号（默认是 `SIGTERM`）。
+- 案例：
+```dockerfile
+# Nginx 建议使用 SIGQUIT 来实现优雅停止
+STOPSIGNAL SIGQUIT
+```
+#### 构建nginx
+创建存放路径以及文件
+```shell
+mkdir /data/dockerfile
+vim /data/dockerfile/Dockerfile
+```
+```shell
+# 1. 指定基础镜像：使用轻量级的 Alpine Linux，极大地减小镜像体积
+FROM alpine:3.20.0
+
+# 2. 定义构建参数 (ARG)：仅在镜像构建 (docker build) 阶段有效
+# 构建时可通过 --build-arg NGINX_VERSION=xxx 灵活更换版本
+ARG NGINX_VERSION=1.28.0
+
+# 3. 定义环境变量 (ENV)：在构建阶段和容器运行阶段均有效
+ENV NGINX_HOME=/apps/nginx
+ENV PATH=$NGINX_HOME/sbin:$PATH
+
+# 4. 设置工作目录 (WORKDIR)：相当于 cd 指令，后续的下载、编译均在此目录下进行
+# 如果目录不存在，Docker 会自动创建
+WORKDIR /usr/local/src
+
+# 5. 执行构建命令 (RUN)：这是最核心的部分，通过 && 将多条命令合并为一层
+RUN sed -i 's@dl-cdn.alpinelinux.org@mirrors.tuna.tsinghua.edu.cn@' \
+    /etc/apk/repositories && \
+    apk update && \
+    # 安装 Nginx 编译所需的依赖包
+    # --no-cache: 不缓存安装包索引，节省空间
+    apk --no-cache add tzdata gcc make curl \
+    zip unzip net-tools pstree wget libgcc \
+    libc-dev libcurl libc-utils pcre-dev zlib-dev \
+    libnfs pcre pcre2 libevent libevent-dev iproute2 && \
+    # 设置时区为上海
+    ln -s /usr/share/zoneinfo/Asia/Shanghai /etc/localtime && \
+    echo "Asia/Shanghai" > /etc/timezone && \
+    # 下载源码、解压、编译并安装
+    wget https://nginx.org/download/nginx-${NGINX_VERSION}.tar.gz && \
+    tar xf nginx-${NGINX_VERSION}.tar.gz && \
+    cd nginx-${NGINX_VERSION} && \
+    ./configure --prefix=$NGINX_HOME && \
+    make && make install && \
+    # 清理安装过程中的源码包以减小体积
+    rm -rf /usr/local/src/*
+
+# 6. 声明端口 (EXPOSE)：告知用户该容器打算监听 8088 端口
+# 注意：这只是文档声明，实际映射仍需在启动时用 -p 指定
+EXPOSE 80
+
+# 7. 设置停止信号 (STOPSIGNAL)：Nginx 建议使用 SIGQUIT 实现优雅停止
+# 它会让 Nginx 处理完当前请求后再退出
+STOPSIGNAL SIGQUIT
+
+# 8. 启动参数 (CMD)：提供 ENTRYPOINT 的默认参数
+# -g "daemon off;": 让 Nginx 在前台运行，这是 Docker 容器能持续运行的关键
+CMD ["-g", "daemon off;"]
+
+# 9. 启动程序 (ENTRYPOINT)：定义容器的主程序
+# 它与 CMD 配合，实际执行命令为：nginx -g "daemon off;"
+ENTRYPOINT ["nginx"]
+```
+构建镜像
+```shell
+cd /data/dockerfile
+
+docker build -t my-nginx:v1.1 ./
+```
+启动测试
+```shell
+docker run -d --name my-web \
+-p 8088:80 --restart always \
+my-nginx:v1.1
+
+curl -I 10.0.0.100:8088
+# HTTP/1.1 200 OK
+```
+### 多阶段构建 
+**自动多阶段构建基于Alpine基础镜像编译Nginx 自定义镜像**
+```shell
+cd /data/dockerfile/web/nginx
+
+wget http://nginx.org/download/nginx-1.28.1.tar.gz
+tar xf nginx-1.28.1.tar.gz
+cp nginx-1.28.1/conf/nginx.conf ./  # 将配置复制到当前目录作为模板
+rm -rf nginx-1.28.1               # 删除解压目录，保持环境整洁
+```
+- **修改 Nginx 配置文件 (`nginx.conf`)：**
+    - 修改 `user nginx;`
+    - 修改 `worker_processes auto;`
+    - 在 `http` 块最后添加 `include "conf.d/*.conf";` 以支持动态站点配置。
+```shell
+[root@ubuntu2404 nginx]# cat nginx.conf
+user nginx ;
+worker_processes  auto;
+events {
+    worker_connections  10240;
+}
+http {
+    include       mime.types;
+    default_type  application/octet-stream;
+    sendfile        on;
+    keepalive_timeout  65;
+    server {
+        listen       80;
+        server_name  localhost;
+        location / {
+            root   html;
+            index  index.html index.htm;
+        }
+        error_page   500 502 503 504  /50x.html;
+        location = /50x.html {
+            root   html;
+        }
+    }
+    include "conf.d/*.conf"; 
+}
+```
+**编写`dockerfile-multistage`文件**
+```shell
+ARG VERSION=3.22.2
+# 第一阶段：编译
+FROM alpine:$VERSION
+LABEL maintainer="wangxiaochun <root@wangxiaochun.com>"
+
+ENV NGINX_VERSION=1.28.1
+ENV NGINX_DIR=/apps/nginx
+
+ADD nginx-$NGINX_VERSION.tar.gz /usr/local/src
+
+RUN sed -i 's/dl-cdn.alpinelinux.org/mirrors.aliyun.com/' /etc/apk/repositories && \
+    apk update && apk --no-cache add gcc make libgcc libc-dev libcurl libc-utils \
+    pcre-dev zlib-dev libnfs pcre pcre2 net-tools curl pstree wget libevent \
+    libevent-dev iproute2 openssl-dev && \
+    cd /usr/local/src/nginx-$NGINX_VERSION && \
+    ./configure --prefix=${NGINX_DIR} --user=nginx --group=nginx \
+    --with-http_ssl_module --with-http_v2_module --with-http_realip_module \
+    --with-http_stub_status_module --with-http_gzip_static_module --with-pcre \
+    --with-stream --with-stream_ssl_module --with-stream_realip_module && \
+    make && make install
+
+COPY nginx.conf ${NGINX_DIR}/conf/nginx.conf
+
+# 第二阶段：运行环境
+FROM alpine:$VERSION
+ENV NGINX_DIR=/apps/nginx
+COPY --from=0 ${NGINX_DIR}/ ${NGINX_DIR}/
+COPY docker-entrypoint.sh /docker-entrypoint.sh
+
+RUN sed -i 's/dl-cdn.alpinelinux.org/mirrors.aliyun.com/' /etc/apk/repositories \
+    && apk update && apk --no-cache add tzdata curl pcre pcre2 \
+    && ln -s /usr/share/zoneinfo/Asia/Shanghai /etc/localtime \
+    && ln -sf ${NGINX_DIR}/sbin/nginx /usr/sbin/nginx \
+    && addgroup -g 888 -S nginx \
+    && adduser -u 888 -D -S -s /sbin/nologin nginx \
+    && chown -R nginx:nginx ${NGINX_DIR}/ \
+    && ln -sf /dev/stdout ${NGINX_DIR}/logs/access.log \
+    && ln -sf /dev/stderr ${NGINX_DIR}/logs/error.log \
+    && chmod +x /docker-entrypoint.sh
+
+WORKDIR ${NGINX_DIR}/
+HEALTHCHECK --interval=5s --timeout=3s CMD curl -fs http://localhost/
+
+ENTRYPOINT ["/docker-entrypoint.sh"]
+CMD ["/apps/nginx/sbin/nginx","-g","daemon off;"]
+```
+**启动脚本内容 (`docker-entrypoint.sh`)**
+```shell
+#!/bin/sh
+# 自动生成虚拟主机配置
+mkdir -p /apps/nginx/conf/conf.d/
+cat > /apps/nginx/conf/conf.d/site.conf <<EOF
+server {
+    listen 80;
+    server_name ${HOST:-www.wang.org};
+    root /data/website;
+}
+EOF
+
+# 创建网页目录并生成首页
+mkdir -p /data/website/
+echo ${HOST:-www.wang.org} > /data/website/index.html
+
+# 执行 CMD 传入的命令
+exec "$@"
+```
+**镜像构建与运行测试命令**
+```shell
+# 构建镜像
+docker build -t nginx:v0.1 -f dockerfile-multistage .
+
+# 查看生成的镜像
+docker images
+
+# 运行容器
+docker run -d --name mynginx -p 80:80 nginx:v0.1
+
+# 查看容器运行状态
+docker ps
+
+# 在容器内查看进程情况
+docker exec mynginx ps aux
+
+# 测试访问（宿主机执行）
+curl 127.0.0.1 -I
+curl -H"host: www.wang.org" 127.0.0.1
+```
+
+ADD 和 COPY 差异
+
+
+
+## 面试
+##### 对于已经启动的容器，怎么查看他的启动命令及参数
+docker run -rm -v /var/run/docker.sock assafiavie/runlike 容器名或ID
+- 通过第三方项目runlike
+
+
+
+
+
+
+
+
+---
