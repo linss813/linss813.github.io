@@ -624,6 +624,7 @@ http {
     include "conf.d/*.conf"; 
 }
 ```
+#### 编写dockerfile
 **编写`dockerfile-multistage`文件**
 ```shell
 ARG VERSION=3.22.2
@@ -672,6 +673,7 @@ HEALTHCHECK --interval=5s --timeout=3s CMD curl -fs http://localhost/
 ENTRYPOINT ["/docker-entrypoint.sh"]
 CMD ["/apps/nginx/sbin/nginx","-g","daemon off;"]
 ```
+#### 启动脚本
 **启动脚本内容 (`docker-entrypoint.sh`)**
 ```shell
 #!/bin/sh
@@ -692,6 +694,7 @@ echo ${HOST:-www.wang.org} > /data/website/index.html
 # 执行 CMD 传入的命令
 exec "$@"
 ```
+#### 验证
 **镜像构建与运行测试命令**
 ```shell
 # 构建镜像
@@ -713,8 +716,184 @@ docker exec mynginx ps aux
 curl 127.0.0.1 -I
 curl -H"host: www.wang.org" 127.0.0.1
 ```
+**多阶段构建优势**
 
-ADD 和 COPY 差异
+| **维度**   | **传统构建 (单阶段)**                | **多阶段构建**       |
+| -------- | ----------------------------- | --------------- |
+| 镜像体积 | 臃肿，包含源码和编译器                   | 极小，仅包含运行环境和成品   |
+| 安全性  | 风险高，镜像内含有编译工具，易被黑客利用          | 风险低，攻击面小        |
+| 构建速度 | 重复构建时缓存利用率低                   | 每一阶段独立，缓存更高效    |
+| 维护性  | 一个 Dockerfile 搞定所有，无需手动清理中间文件 | 逻辑清晰，符合“单一职责原则” |
+## Docker数据管理
+Docker镜像由多个只读层叠加而成，启动容器时，Docker会加载只读镜像层并在镜像栈顶部添加一个读写层。
+Docker镜像是分层设计的，镜像层是只读的，通过镜像启动的容器添加了一层可读写的文件系统，用户写入的数据都保存在这一层中。
+### 容器的分层
+#### 联合文件系统 (UnionFS)
+Docker 镜像并非一个单一的巨大文件，而是由多个独立的层（Layer）组成的。这背后依赖于 **UnionFS** 技术。
+分层剖析（以多阶段 Nginx 为例）：
+每一层都是不可变的
+-  **基础镜像层** (Base Image)：Alpine Linux 核心，提供最小运行环境。
+-  **依赖层**：通过 `apk add` 引入的 `pcre`、`openssl` 动态库。
+-  **应用层**：从 Builder 阶段通过 `COPY` 搬运过来的二进制执行文件。
+-  **配置层**：最后加入的 `nginx.conf` 和启动脚本。
+#### 只读镜像层
+- **不可变性**：一旦镜像构建完成，这些层就是只读的，永远不会改变。
+- **共享性**：如果基于同一个 Nginx 镜像启动了 10 个容器，这 10 个容器会共享宿主机上同一份只读镜像数据，不会占用 10 倍空间。
+#### 可写容器层
+- **生命周期**：当容器启动时，Docker 会在镜像层最上方添加一个薄薄的“可写层”。
+- **临时性**：所有在运行期间产生的修改（如你在 `docker-entrypoint.sh` 中创建的 `site.conf` 或生成的日志）都只存在于这一层。
+- **销毁即消失**：如果你删除了容器，这一层的数据也会随之丢失。
+#### 写时复制 (Copy-on-Write)
+如果在容器内修改一个只读层的文件，Docker 会触发以下流程：
+1. **向上查找**：从顶部开始向下寻找目标文件。
+2. **执行拷贝**：找到文件后，将其复制到顶部的可写层。
+3. **实时覆盖**：修改可写层中的副本。此时，容器内看到的版本是修改后的，下层的原件被“隐藏”。
+
+> 性能贴士：大文件的写时复制会导致明显的延迟。因此，不建议在容器层进行大规模数据写入。
+
+### 容器数据持久化
+如果要将写入到容器的数据永久保存，则需要将容器中的数据保存到宿主机的指定目录
+#### 绑定挂载（Bind Mount）
+这种方式可以将指定的宿主机上的任意文件或目录挂载到容器内。与卷不同，绑定挂载依赖于宿主
+机的文件系统结构
+- **特点：** 性能极高，不经过 Docker 存储驱动（如 Overlay2）的写时复制（CoW）层，直接读写宿主机物理硬盘。
+- **应用场景：** 源代码热同步、日志持久化、配置文件共享。
+```shell
+# -v 宿主机绝对路径:容器内绝对路径
+docker run -d --name mynginx-web \
+  -v /data/html:/data/website \
+  nginx-pro:v1.0
+```
+####  卷（Volume）
+这是 Docker 推荐的挂载方式。卷是完全由 Docker 管理的文件目录，可以在容器之间共享和重
+用。在创建卷时，Docker 创建了一个目录在宿主机上，然后将这个目录挂载到容器内。卷的主要
+优点是你可以使用 Docker CLI 或 Docker API 来备份、迁移或者恢复卷，而无需关心卷在宿主机上
+的具体位置。
+卷分为匿名卷和命名卷
+##### 命名卷
+```shell
+# 1. 创建卷
+docker volume create nginx-log
+
+# 2. 挂载卷
+docker run -d \
+  --name web-server \
+  -v nginx-log:/apps/nginx/logs \
+  nginx:v0.1
+```
+
+### wordpress持久化
+```shell
+# 部署 MySQL 数据库容器
+docker run -p 3306:3306 \
+  -e MYSQL_ROOT_PASSWORD=123456 \
+  -e MYSQL_DATABASE=wordpress \
+  -e MYSQL_USER=wordpress \
+  -e MYSQL_PASSWORD=654321 \
+  --name mysql -d \
+  -v /data/mysql:/var/lib/mysql \      # 持久化
+  --restart=always \
+  registry.cn-beijing.aliyuncs.com/wangxiaochun/mysql:8.0.29-oracle
+  
+# 部署 WordPress 容器
+docker run -d -p 80:80 \
+  --name wordpress \
+  -v /data/wordpress:/var/www/html \    # 持久化
+  --restart=always \ 
+  registry.cn-beijing.aliyuncs.com/wangxiaochun/wordpress:6.9.0-php8.5-apache
+  
+```
+
+## Docker网络管理
+###  Docker安装后默认的网络设置
+Docker服务安装完成之后，默认在每个宿主机会生成一个名称为docker0的网卡其IP地址都是172.17.0.1/16
+```shell
+[root@ubuntu2404 nginx]#ip a show docker0
+3: docker0: <BROADCAST,MULTICAST,UP,LOWER_UP> mtu 1500 qdisc noqueue state UP group default 
+    link/ether 1a:3a:59:26:8c:98 brd ff:ff:ff:ff:ff:ff
+    inet 172.17.0.1/16 brd 172.17.255.255 scope global docker0
+       valid_lft forever preferred_lft forever
+    inet6 fe80::183a:59ff:fe26:8c98/64 scope link 
+       valid_lft forever preferred_lft forever
+```
+### 创建容器后的网络配置
+veth（Virtual Ethernet）是Linux内核中的一种虚拟网络设备，通常用于连接两个网络命名空间。veth设备总是成对出现
+容器内网卡  `eth0@if6` 数字6对应宿主机网卡第6个，宿主机网卡`vethf8813a1@if2`的数字2对应容器内的第2个。
+```shell
+# 容器内网卡   eth0@if6
+[root@ubuntu2404 nginx]#docker exec -it 18f631b0aff2 ip a
+2: eth0@if6: <BROADCAST,MULTICAST,UP,LOWER_UP,M-DOWN> mtu 1500 qdisc noqueue state UP 
+    link/ether ea:29:4c:15:a9:ea brd ff:ff:ff:ff:ff:ff
+    inet 172.17.0.2/16 brd 172.17.255.255 scope global eth0
+       valid_lft forever preferred_lft forever
+# 宿主机网卡   vethf8813a1@if2
+[root@ubuntu2404 nginx]#ip a
+6: vethf8813a1@if2: <BROADCAST,MULTICAST,UP,LOWER_UP> mtu 1500 qdisc noqueue master docker0 state UP group default 
+    link/ether 7a:b5:19:68:36:c8 brd ff:ff:ff:ff:ff:ff link-netnsid 0
+    inet6 fe80::78b5:19ff:fe68:36c8/64 scope link 
+       valid_lft forever preferred_lft forever
+```
+### linux网桥 
+Linux 网桥（Bridge）在软件层面模拟了物理交换机的功能。
+- **功能**：它可以在不同的网络接口之间转发数据包。
+- **Docker 中的应用**：当你运行 Docker 时，默认会创建一个名为 `docker0` 的虚拟网桥。所有容器默认都会连接到这个网桥上，通过它进行容器间通信或访问外网。
+#### brctl
+`bridge-utils` 是一个经典的工具集，用于配置和管理 Linux 内核虚拟网桥
+```shell
+apt -y install bridge-utils 
+brctl show
+```
+```shell
+[root@ubuntu2404 nginx]# brctl show
+bridge name     bridge id               STP enabled     interfaces
+docker0         8000.1a3a59268c98       no              vethb60f28c
+                                                        vethf8813a1
+```
+常用命令
+```shell
+# 查看所有网桥信息
+brctl show
+
+# 创建/删除网桥
+brctl addbr mybridge    # 创建名为 mybridge 的网桥
+brctl delbr mybridge    # 删除网桥
+
+# 接口管理（将接口加入网桥）
+brctl addif mybridge eth1  # 添加接口
+brctl delif mybridge eth1  
+
+# MAC 地址表管理
+brctl showmacs mybridge   # 查看 MAC 地址表
+```
+现代替代方案
+```shell
+ip link show type bridge
+# 创建网桥
+ip link add name br0 type bridge
+# 添加接口
+ip link set eth0 master br0
+```
+
+###  Docker 网络连接模式(重点)
+Docker 的网络支持 5 种网络模式: 
+- none
+- host
+- bridge
+- container
+- network-name
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 
 
