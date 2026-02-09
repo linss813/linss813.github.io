@@ -17,7 +17,7 @@
 > 后续步骤用到的yaml文件从下面地址获取
 > 网址有效期至2026-06-12
 > 
-> ==https://www.linss.fun/resources/yaml/==
+> https://www.linss.fun/resources/yaml/
 
 
 
@@ -507,7 +507,7 @@ kubectl apply -f service-loadbalancer-lbaas.yaml
 ```
 验证地址池是否能成功分配外部 IP。
 ```sh
-[root@master1 ~]#kubectl get svc
+[root@master1 ~]# kubectl get svc
 NAME                         TYPE           CLUSTER-IP       EXTERNAL-IP   PORT(S)        AGE
 kubernetes                   ClusterIP      10.96.0.1        <none>        443/TCP        22m
 service-loadbalancer-lbaas   LoadBalancer   10.102.225.114   10.0.0.10     80:32633/TCP   84s
